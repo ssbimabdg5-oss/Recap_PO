@@ -101,17 +101,6 @@ window.bimaLib=(function(){
   .kpi .sub{font-size:11.5px;margin-top:2px;color:var(--hint)}
   .kpi.hero{background:linear-gradient(135deg,#072638,#0e3a52);border-color:#1f5775}
   .kpi.hero .lbl{color:#9fc3d6}.kpi.hero .val{color:#fff}.kpi.hero .sub{color:#9fc3d6}
-  /* KPI status pengiriman PO (klik kartu = filter Status PO) */
-  .kpis{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
-  .kpi.kpi-st{cursor:pointer;border-left:5px solid var(--border);transition:box-shadow .15s,transform .15s}
-  .kpi.kpi-st:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(7,38,56,.16)}
-  .kpi.kpi-st.on{box-shadow:0 0 0 2px var(--info)}
-  .kpi.kpi-st .val{font-size:30px}
-  .kpi.k-ok{border-left-color:var(--ok)}.kpi.k-ok .val{color:var(--ok)}
-  .kpi.k-no{border-left-color:var(--danger)}.kpi.k-no .val{color:var(--danger)}
-  .kpi.k-wait{border-left-color:var(--warn)}.kpi.k-wait .val{color:var(--warn)}
-  .kpi.kpi-st .sub2{font-size:11.5px;margin-top:3px;color:var(--muted)}
-  .kpi-note{grid-column:1/-1;font-size:12px;color:var(--warn);background:var(--warn-bg);border-radius:var(--r);padding:7px 11px}
   .pos{color:var(--pos)}.neg{color:var(--neg)}
 
   /* ===== Tabs ===== */
@@ -1080,17 +1069,14 @@ window.RLIM=(function(){
           <div class="msfilter-list" id="accFilterList"></div>
         </div>
       </div>
-      <span id="aksiFilterWrap" style="display:inline-flex;align-items:center;gap:8px">
-        <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Status PO:</span>
-        <div class="msfilter" id="aksiFilterMS"><button type="button" class="msfilter-btn trunc" id="aksiFilterBtn" title="Filter Status PO (berlaku untuk KPI, Overview, By Destination, By Month, Detail)">Semua status PO</button><div class="msfilter-panel" id="aksiFilterPanel"></div></div>
-      </span>
-      <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Destination:</span>
-      <div class="msfilter" id="dcFilterMS"><button type="button" class="msfilter-btn trunc" id="dcFilterBtn" title="Filter Destination / DC (mengikuti Account terpilih)">Semua destination</button><div class="msfilter-panel" id="dcFilterPanel"></div></div>
       <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Bulan:</span>
       <div class="msfilter" id="monthFilterMS"><button type="button" class="msfilter-btn trunc" id="monthFilterBtn" title="Filter bulan (berdasarkan Order Date)">Semua bulan</button><div class="msfilter-panel" id="monthFilterPanel"></div></div>
       <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Brand:</span>
       <div class="msfilter" id="brandFilterMS"><button type="button" class="msfilter-btn trunc" id="brandFilterBtn" title="Filter brand (bisa pilih lebih dari satu)">Semua brand</button><div class="msfilter-panel" id="brandFilterPanel"></div></div>
-      <button type="button" class="sbtn" id="filterResetBtn" title="Hapus semua filter">Reset filter</button>
+      <span id="aksiFilterWrap" style="display:none;align-items:center;gap:8px">
+        <span style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Status PO:</span>
+        <div class="msfilter" id="aksiFilterMS"><button type="button" class="msfilter-btn trunc" id="aksiFilterBtn" title="Filter Status PO (Detail PO List)">Semua status PO</button><div class="msfilter-panel" id="aksiFilterPanel"></div></div>
+      </span>
       <span class="acc-chips" id="accChips"></span>
     </div>
 
@@ -1102,7 +1088,7 @@ window.RLIM=(function(){
         <div class="chartcard"><h4>PO Value by Account (incl. VAT)</h4><div class="cwrap"><canvas id="c-account"></canvas></div></div>
         <div class="chartcard"><h4>PO Value by Month (incl. VAT)</h4><div class="cwrap"><canvas id="c-month"></canvas></div></div>
         <div class="chartcard"><h4>PO Value by Destination</h4><div class="cwrap"><canvas id="c-dc"></canvas></div></div>
-        <div class="chartcard"><h4>Status Pengiriman PO (jumlah PO)</h4><div class="cwrap"><canvas id="c-status"></canvas></div></div>
+        <div class="chartcard"><h4>PO Status</h4><div class="cwrap"><canvas id="c-status"></canvas></div></div>
         <div class="chartcard"><h4>Top 10 Items by Value</h4><div class="cwrap"><canvas id="c-item"></canvas></div></div>
       </div>
     </div>
@@ -3344,62 +3330,20 @@ const RKEY='bima_po_received';
 let received={}; try{received=JSON.parse(localStorage.getItem(RKEY)||'{}');}catch(e){received={};}
 function saveReceived(){try{localStorage.setItem(RKEY,JSON.stringify(received));}catch(e){}}
 let accountFilter=[]; // array of selected accounts; empty array = all accounts
-let monthFilter=[], aksiFilter=[], brandFilter=[], dcFilter=[];
-let _noStatF=false; // true saat menghitung status PO (supaya filter Status PO tidak ikut memfilter basis hitungannya)
-/* Account Yomart = Destination DC Griya Center & DC Gede Bage */
-const YOMART_ACC='Yomart';
-const YOMART_RE=/griya\s*center|gede\s*bage|gedebage/i;
+let monthFilter=[], aksiFilter=[], brandFilter=[];
 function poMonthKey(po){
   const d=parseDate((po||{}).tglPesan)||parseDate((po||{}).tglKirim);
   return d?d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'):'';
 }
-function filteredPOSBase(){
+function filteredPOS(){
   let r=accountFilter.length?POS.filter(p=>accountFilter.includes(p.account)):POS;
-  if(dcFilter.length) r=r.filter(p=>dcFilter.includes(p.dc||'(?)'));
   if(monthFilter.length) r=r.filter(p=>monthFilter.includes(poMonthKey(p)));
   if(brandFilter.length) r=r.filter(p=>(p.items||[]).some(itemSel));
   return r;
 }
-function filteredPOS(){
-  const r=filteredPOSBase();
-  if(!aksiFilter.length||_noStatF) return r;
-  return r.filter(p=>aksiFilter.includes(poStatusOf({account:p.account,fpp:p.fpp}).aksi||'(Tanpa status)'));
-}
-/* Normalisasi account: PO dengan Destination DC Griya Center / DC Gede Bage dimasukkan ke account Yomart */
-function yomartNormalize(){
-  const moved=new Set(), delKeys=[];
-  for(const po of POS){
-    if(po.account!==YOMART_ACC && YOMART_RE.test(po.dc||'')){
-      moved.add((po.account||'')+'##'+(po.fpp||''));
-      delKeys.push((po.fpp||'')+'||'+(po.account||''));
-      po.account=YOMART_ACC;
-    }
-  }
-  if(moved.size){
-    // gabungkan duplikat (PO sama setelah pindah account) — yang _prio lebih tinggi / lebih baru dipakai
-    const m=new Map();
-    for(const po of POS){ const k=(po.fpp||'')+'\u0001'+po.account; const c=m.get(k); if(!c||(po._prio||0)>=(c._prio||0)) m.set(k,po); }
-    if(m.size!==POS.length){ const arr=[...m.values()]; POS.length=0; for(const x of arr) POS.push(x); }
-    // pindahkan koreksi PO / realisasi manual yang tersimpan per account
-    try{
-      let ch=false; const nr={};
-      for(const k of Object.keys(RL_MANUAL)){
-        const isPo=k.indexOf('PO##')===0, parts=(isPo?k.slice(4):k).split('##');
-        if(moved.has((parts[0]||'')+'##'+(parts[1]||''))){ parts[0]=YOMART_ACC; nr[(isPo?'PO##':'')+parts.join('##')]=RL_MANUAL[k]; ch=true; }
-        else nr[k]=RL_MANUAL[k];
-      }
-      if(ch){ RL_MANUAL=nr; localStorage.setItem(RLKEY,JSON.stringify(RL_MANUAL)); }
-    }catch(e){ console.warn('migrasi realisasi manual',e); }
-    // simpan ke IndexedDB: hapus record account lama, simpan yang baru
-    try{
-      Promise.resolve(idbDeletePOS(delKeys)).catch(e=>console.warn(e)).then(()=>idbSavePOS(POS)).catch(e=>idbFail('menyimpan data PO',e));
-    }catch(e){ console.warn(e); }
-  }
-  try{ for(const r of MANUAL_ITEMS){ if(r.account!==YOMART_ACC && YOMART_RE.test(r.dc||'')) r.account=YOMART_ACC; } }catch(e){}
-}
 function populateMonthFilter(){
   if(typeof MS_MONTH==='undefined'||!MS_MONTH) return;
-  const cnt={}; POS.filter(p=>!accountFilter.length||accountFilter.includes(p.account)).forEach(p=>{const k=poMonthKey(p); if(k) cnt[k]=(cnt[k]||0)+1;});
+  const cnt={}; POS.forEach(p=>{const k=poMonthKey(p); if(k) cnt[k]=(cnt[k]||0)+1;});
   const keys=Object.keys(cnt).sort().reverse();
   monthFilter=monthFilter.filter(k=>keys.includes(k));
   MS_MONTH.refresh(keys.map(k=>{const [y,m]=k.split('-');return {v:k,label:MONLABEL[+m-1]+' '+y,count:cnt[k]};}));
@@ -3433,8 +3377,7 @@ function populateItemFilter(){
 function rowPassesFilters(r){
   const po=r._po||POS.find(p=>p.fpp===r.fpp&&p.account===r.account)||POS.find(p=>p.fpp===r.fpp)||null;
   if(monthFilter.length&&(!po||!monthFilter.includes(poMonthKey(po)))) return false;
-  if(aksiFilter.length&&!aksiFilter.includes(poStatusOf(r).aksi||'(Tanpa status)')) return false;
-  if(dcFilter.length&&!dcFilter.includes(r.dc||(po&&po.dc)||'(?)')) return false;
+  if(aksiFilter.length&&!aksiFilter.includes(poStatusOf(r).aksi)) return false;
   if(!itemSel(r)) return false;
   return true;
 }
@@ -3459,7 +3402,7 @@ setTimeout(restorePOS, 50);
 initBranchStorage();
 setTimeout(initBranchStorage, 400);
 
-const ACC_COLORS={'Alfamart':'#002fe0','Hypermart':'#8a5108','Yogya/Griya':'#06972f','Yomart':'#ea580c','Ramayana':'#7c3aed','Transmart':'#e11d48','Lotte':'#0891b2','AEON':'#d97706','Hero':'#be123c','Borma':'#0f766e','Indomaret':'#e53935','Indogrosir':'#c2185b','Berkah Bandung Ops':'#0369a1','(Unrecognized)':'#5a6b76'};
+const ACC_COLORS={'Alfamart':'#002fe0','Hypermart':'#8a5108','Yogya/Griya':'#06972f','Ramayana':'#7c3aed','Transmart':'#e11d48','Lotte':'#0891b2','AEON':'#d97706','Hero':'#be123c','Borma':'#0f766e','Indomaret':'#e53935','Indogrosir':'#c2185b','Berkah Bandung Ops':'#0369a1','(Unrecognized)':'#5a6b76'};
 function accColor(a){return ACC_COLORS[a]||'#5a6b76';}
 /* Warna teks/latar chip account yang terbaca di tema terang & gelap */
 function isDarkTheme(){const t=document.documentElement.getAttribute('data-theme');return t?t==='dark':!!(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches);}
@@ -3546,7 +3489,6 @@ async function handle(files){
             (window._accFixed=window._accFixed||[]).push(po.fpp+': '+_old.account+' → '+po.account);
           }
         }
-        if(po.account!==YOMART_ACC&&YOMART_RE.test(po.dc||'')) po.account=YOMART_ACC;
         let ex=POS.findIndex(p=>p.fpp===po.fpp&&p.account===po.account);
         if(ex>=0){
           const cur=POS[ex];
@@ -4017,52 +3959,12 @@ function agg(){
     item:Object.values(byItem).sort((a,b)=>b.total-a.total)};
 }
 
-/* ============ KPI status pengiriman PO ============ */
-const KPI_SETS={ok:['Terkirim','Terkirim Sebagian'],no:['Tidak Terkirim'],wait:['Belum Terkirim','(Tanpa status)']};
-function poKpiSummary(){
-  const by={}; ['Terkirim','Terkirim Sebagian','Belum Terkirim','Tidak Terkirim','(Tanpa status)'].forEach(k=>by[k]={n:0,v:0});
-  const prev=_noStatF; _noStatF=true;   // KPI selalu menampilkan ketiga status walau filter Status PO aktif
-  try{
-    const man=(typeof MANUAL_ITEMS!=='undefined'?MANUAL_ITEMS:[]).filter(r=>(!accountFilter.length||accountFilter.includes(r.account))&&(!dcFilter.length||dcFilter.includes(r.dc||'(?)')));
-    const seen=new Map();
-    for(const r of [...detailRows(),...man]){
-      const k=(r.account||'')+'##'+(r.fpp||'');
-      let e=seen.get(k); if(!e){ e={st:poStatusOf(r).aksi||'(Tanpa status)',v:0}; seen.set(k,e); }
-      if(itemSel(r)) e.v+=r.total||0;
-    }
-    seen.forEach(e=>{ const b=by[e.st]||(by[e.st]={n:0,v:0}); b.n++; b.v+=e.v; });
-    let n=0,v=0; Object.keys(by).forEach(k=>{n+=by[k].n; v+=by[k].v;});
-    return {by,total:{n,v}};
-  } finally { _noStatF=prev; }
-}
-function populateDcStatusFilters(){
-  if(typeof MS_DC!=='undefined'&&MS_DC){
-    const cnt={};
-    POS.filter(p=>!accountFilter.length||accountFilter.includes(p.account)).forEach(p=>{const d=p.dc||'(?)'; cnt[d]=(cnt[d]||0)+1;});
-    const keys=Object.keys(cnt).sort((a,b)=>a.localeCompare(b));
-    dcFilter=dcFilter.filter(k=>keys.includes(k));
-    MS_DC.refresh(keys.map(k=>({v:k,label:k,count:cnt[k]})));
-  }
-  if(typeof MS_AKSI!=='undefined'&&MS_AKSI&&window.__kpiSum){
-    const by=window.__kpiSum.by;
-    MS_AKSI.refresh(['Terkirim','Terkirim Sebagian','Belum Terkirim','Tidak Terkirim','(Tanpa status)'].map(v=>({v,label:v,count:(by[v]||{n:0}).n})));
-  }
-}
-document.getElementById('kpis').addEventListener('click',e=>{
-  const c=e.target.closest('[data-kpi]'); if(!c) return;
-  const set=KPI_SETS[c.dataset.kpi]; if(!set) return;
-  const same=aksiFilter.length===set.length&&set.every(x=>aksiFilter.includes(x));
-  aksiFilter=same?[]:set.slice();
-  if(window.RLIM) RLIM.reset('detail');
-  render();
-});
-
 /* ============ render ============ */
 let charts={};
 function destroyCharts(){Object.values(charts).forEach(c=>c&&c.destroy());charts={};}
 function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
 
-function render(){ try{ yomartNormalize(); }catch(e){ console.warn('Yomart',e); } POSTAT=null; _inRender=true; try{ return _renderImpl(); } finally{ _inRender=false; } }
+function render(){ POSTAT=null; _inRender=true; try{ return _renderImpl(); } finally{ _inRender=false; } }
 function _renderImpl(){
   if(!POS.length){$('#dash').classList.add('hide');updateBrandBtns();refreshRekapPoBadge();return;}
   $('#dash').classList.remove('hide');
@@ -4072,23 +3974,18 @@ function _renderImpl(){
   // subbar
   const accs=[...new Set(POS.map(p=>p.account))];
   $('#subAccounts').textContent=`${POS.length} POs across ${accs.length} account${accs.length>1?'s':''}`;
-  // KPIs: status pengiriman PO (per nomor PO) — Terkirim / Tidak Terkirim / Outstanding
-  const K=poKpiSummary(); window.__kpiSum=K;
-  const _g=(...ks)=>ks.reduce((t,k)=>({n:t.n+K.by[k].n,v:t.v+K.by[k].v}),{n:0,v:0});
-  const kOk=_g('Terkirim','Terkirim Sebagian'), kNo=_g('Tidak Terkirim'), kWt=_g('Belum Terkirim','(Tanpa status)');
-  const _pc=n=>K.total.n>0?(n/K.total.n*100).toFixed(1)+'%':'-';
-  const _on=k=>{const set=KPI_SETS[k];return aksiFilter.length===set.length&&set.every(x=>aksiFilter.includes(x))?' on':'';};
-  const _card=(k,cls,lbl,x,sub2)=>`<div class="kpi kpi-st ${cls}${_on(k)}" data-kpi="${k}" title="Klik untuk memfilter Status PO"><div class="lbl">${lbl}</div><div class="val">${x.n.toLocaleString('id-ID')}</div><div class="sub">${rpShort(x.v)} &middot; ${_pc(x.n)} dari ${K.total.n.toLocaleString('id-ID')} PO</div><div class="sub2">${sub2}</div></div>`;
-  $('#kpis').innerHTML=
-    _card('ok','k-ok','Total PO Terkirim',kOk,`${K.by['Terkirim'].n} terkirim penuh &middot; ${K.by['Terkirim Sebagian'].n} sebagian`)
-   +_card('no','k-no','Total PO Tidak Terkirim',kNo,'Tanggal kirim terlewat &amp; belum ada realisasi')
-   +_card('wait','k-wait','PO Outstanding / Belum Terkirim',kWt,K.by['(Tanpa status)'].n?`${K.by['Belum Terkirim'].n} belum jatuh tempo &middot; ${K.by['(Tanpa status)'].n} tanpa tanggal kirim`:'Belum jatuh tempo &amp; belum ada realisasi')
-   +((typeof SALES_ROWS!=='undefined'&&!SALES_ROWS.length)?'<div class="kpi-note">Data penjualan belum diupload — status Terkirim/Tidak Terkirim dihitung dari tanggal kirim saja. Upload CSV Penjualan di tab Detail PO List agar akurat.</div>':'');
+  // KPIs
+  const sc=a.statCnt;
+  $('#kpis').innerHTML=`
+    <div class="kpi hero"><div class="lbl">Total incl. VAT</div><div class="val">${rpShort(a.incl)}</div><div class="sub">${filteredPOS().length} purchase orders</div></div>
+    <div class="kpi"><div class="lbl">Total before VAT</div><div class="val">${rpShort(a.net)}</div><div class="sub">Discounts ${rpShort(a.disc)}</div></div>
+    <div class="kpi"><div class="lbl">Input VAT</div><div class="val">${rpShort(a.ppn)}</div><div class="sub">PPN Masukan</div></div>
+    <div class="kpi"><div class="lbl">Open POs</div><div class="val">${sc.Active+sc.Upcoming}</div><div class="sub">${sc.Received} received &middot; ${sc.Expired} expired</div></div>
+    <div class="kpi"><div class="lbl">Accounts</div><div class="val">${accs.length}</div><div class="sub">${accs.join(', ')||'—'}</div></div>`;
   drawCharts(a);
   try{drawVsActual();}catch(e){console.warn(e);}
   populateAccFilter();
   populateMonthFilter();
-  populateDcStatusFilters();
   if(typeof mRefreshAccounts==='function') mRefreshAccounts();
   renderAccount(a.account); renderDC(a.dc); renderMonth(a.month); renderItem(a.item); renderDetail(); renderPO();
   refreshRekapPoBadge();
@@ -4182,13 +4079,8 @@ document.addEventListener('click',e=>{
 },true);
 var MS_MONTH=makeMS({id:'monthFilter',all:'Semua bulan',noun:'bulan',get:()=>monthFilter,set:v=>{monthFilter=v;},onChange:()=>{RLIM.reset('detail');render();}});
 var MS_BRAND=makeMS({id:'brandFilter',all:'Semua brand',noun:'brand',search:true,get:()=>brandFilter,set:v=>{brandFilter=v;},onChange:()=>{RLIM.reset('detail');render();}});
-var MS_AKSI=makeMS({id:'aksiFilter',all:'Semua status PO',noun:'status',get:()=>aksiFilter,set:v=>{aksiFilter=v;},onChange:()=>{RLIM.reset('detail');render();}});
-var MS_DC=makeMS({id:'dcFilter',all:'Semua destination',noun:'destination',search:true,get:()=>dcFilter,set:v=>{dcFilter=v;},onChange:()=>{RLIM.reset('detail');render();}});
-document.getElementById('filterResetBtn').addEventListener('click',()=>{
-  accountFilter=[];monthFilter=[];brandFilter=[];aksiFilter=[];dcFilter=[];
-  RLIM.reset('detail'); render();
-});
-if(MS_AKSI) MS_AKSI.refresh(['Terkirim','Terkirim Sebagian','Belum Terkirim','Tidak Terkirim','(Tanpa status)'].map(v=>({v,label:v})));
+var MS_AKSI=makeMS({id:'aksiFilter',all:'Semua status PO',noun:'status',get:()=>aksiFilter,set:v=>{aksiFilter=v;},onChange:()=>{RLIM.reset('detail');renderDetail();}});
+if(MS_AKSI) MS_AKSI.refresh(['Terkirim','Terkirim Sebagian','Belum Terkirim','Tidak Terkirim'].map(v=>({v,label:v})));
 
 function drawCharts(a){
   destroyCharts();
@@ -4211,12 +4103,11 @@ function drawCharts(a){
       datasets:[{data:a.dc.slice(0,12).map(d=>d.incl),backgroundColor:a.dc.slice(0,12).map(d=>accColor(d.account)),borderRadius:5}]},
     options:opt({indexAxis:'y',scales:{x:moneyAx,y:{grid:{display:false},ticks:{font:{size:9},color:tick}}},plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>rp(c.parsed.x)}}}})});
   // status
-  const _kb=(window.__kpiSum&&window.__kpiSum.by)||{};
-  const _stL=['Terkirim','Terkirim Sebagian','Belum Terkirim','Tidak Terkirim','(Tanpa status)'];
+  const sc=a.statCnt;
   charts.status=new Chart($('#c-status'),{type:'doughnut',
-    data:{labels:_stL.map(x=>x==='(Tanpa status)'?'Tanpa tanggal kirim':x),
-      datasets:[{data:_stL.map(x=>(_kb[x]||{n:0}).n),
-        backgroundColor:[cssVar('--accent'),cssVar('--info'),cssVar('--warn'),cssVar('--danger'),cssVar('--hint')],borderWidth:2,borderColor:cssVar('--surface')}]},
+    data:{labels:['Received','Active','Upcoming','Expired'],
+      datasets:[{data:[sc.Received,sc.Active,sc.Upcoming,sc.Expired],
+        backgroundColor:[cssVar('--info'),cssVar('--accent'),cssVar('--warn'),cssVar('--danger')],borderWidth:2,borderColor:cssVar('--surface')}]},
     options:opt({cutout:'58%',plugins:{legend:{display:true,position:'bottom',labels:{font:{size:11},color:tick,boxWidth:12}}}})});
   // items
   // Nama produk mengikuti Master Barang Sistem (fallback ke nama PO bila belum ada di master);
@@ -4766,8 +4657,7 @@ function makePosIdx(){
   for(const p of POS){ const k=p.fpp+'\u0001'+p.account; if(!a.has(k)) a.set(k,p); if(!f.has(p.fpp)) f.set(p.fpp,p); }
   return r=>a.get(r.fpp+'\u0001'+r.account)||f.get(r.fpp)||null;
 }
-function buildPoStat(){ const _pv=_noStatF; _noStatF=true; try{ _buildPoStatImpl(); } finally{ _noStatF=_pv; } }
-function _buildPoStatImpl(){
+function buildPoStat(){
   POSTAT=new Map(); const _pf=makePosIdx();
   const man=MANUAL_ITEMS.map((r,idx)=>({...r,_manual:true,_manualIdx:idx})).filter(r=>!accountFilter.length||accountFilter.includes(r.account));
   for(const r of [...detailRows(),...man]){
@@ -4851,7 +4741,7 @@ function openRlModal(r){
   if(rs) rs.onclick=()=>{
     const o=RL_MANUAL[key]||(RL_MANUAL[key]={}); o.upd=false; o.tgl=''; o.dus=null; o.pcs=null; o.val=null;
     if(!o.ket) delete RL_MANUAL[key];
-    saveRlManual(); close(); POSTAT=null; render();
+    saveRlManual(); close(); POSTAT=null; renderDetail();
   };
   const save=()=>{
     const nf=inp.value.trim();
@@ -4883,8 +4773,7 @@ async function salesLoad(){
   }catch(e){ if(window.idbFail) window.idbFail('memuat data penjualan',e); }
   refreshSalesInfo();
   window.__salesLoaded=true;
-  /* render penuh (bukan hanya Detail) agar KPI, donat status & Account vs Actual ikut memakai data penjualan */
-  if(typeof render==='function') render(); else if(typeof window.renderDetail==='function') window.renderDetail();
+  if(typeof window.renderDetail==='function') window.renderDetail();
 }
 async function salesHandleFile(file){
   try{
@@ -4927,7 +4816,7 @@ async function salesHandleFile(file){
       newFrom:nFrom,newTo:nTo,at:new Date().toLocaleString('id-ID')};
     try{ await salesDbPut({rows:merged,meta}); }catch(e){ if(window.idbFail) window.idbFail('menyimpan data penjualan',e); }
     SALES_ROWS=merged; SALES_META=meta; buildSalesIdx();
-    refreshSalesInfo(); render();
+    refreshSalesInfo(); renderDetail();
   }catch(e){ console.error(e); alert('Gagal membaca CSV penjualan: '+e.message); }
 }
 (function(){
@@ -4939,7 +4828,7 @@ async function salesHandleFile(file){
   if(clr) clr.onclick=async()=>{
     if(!confirm('Hapus data penjualan yang tersimpan? Kolom Realisasi & Aksi akan kosong lagi.')) return;
     try{ await salesDbClear(); }catch(e){}
-    SALES_ROWS=[]; SALES_META=null; SALES_IDX=new Map(); refreshSalesInfo(); render();
+    SALES_ROWS=[]; SALES_META=null; SALES_IDX=new Map(); refreshSalesInfo(); renderDetail();
   };
 })();
 
@@ -5183,7 +5072,7 @@ function renderDetail(){
         MANUAL_ITEMS.splice(r._manualIdx,1);
         saveManualItems();
         editDetailKey=null;
-        render();
+        renderDetail();
       }
     }else{
       const po=r._po;
@@ -5276,6 +5165,7 @@ document.querySelectorAll('.tabbtn').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tabpanel').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
   document.querySelector(`.tabpanel[data-panel="${t.dataset.tab}"]`).classList.add('active');
+  const _aw=document.getElementById('aksiFilterWrap'); if(_aw) _aw.style.display=(t.dataset.tab==='detail')?'inline-flex':'none';
 });
 
 /* Manual refresh: muat ulang Master Barang (IndexedDB) + Master Barang Sistem (localStorage),
@@ -5328,7 +5218,6 @@ $('#loadfile').addEventListener('change',e=>{
         if(!po.fpp)continue;
         po.received=po.received||!!received[po.fpp];
         if(po.received)received[po.fpp]=true;
-        if(po.account!==YOMART_ACC&&YOMART_RE.test(po.dc||'')) po.account=YOMART_ACC;
         const ex=POS.findIndex(p=>p.fpp===po.fpp&&p.account===po.account);
         if(ex>=0){POS[ex]=po;merged++;}else{POS.push(po);added++;}
       }
@@ -5347,7 +5236,7 @@ $('#btnClear').onclick=async()=>{
   const nSales=(typeof SALES_ROWS!=='undefined')?SALES_ROWS.length:0;
   if(!POS.length&&!nSales)return;
   if(confirm(`Hapus ${POS.length} PO dan data penjualan yang sudah diupload${nSales?` (${nSales.toLocaleString('id-ID')} baris)`:''}?\n\nMaster Barang, Master Barang Sistem dan Account Vendor TIDAK ikut dihapus.`+(CLOUD.on?'\n\n⚠ DATA INI JUGA AKAN TERHAPUS UNTUK SEMUA USER (tersimpan di cloud).':''))){
-    POS=[];accountFilter=[];monthFilter=[];brandFilter=[];aksiFilter=[];dcFilter=[];
+    POS=[];accountFilter=[];monthFilter=[];brandFilter=[];aksiFilter=[];
     try{MANUAL_ITEMS=[];localStorage.removeItem(MKEY);}catch(e){}
     try{ await salesDbClear(); }catch(e){ console.warn('Sales clear error:',e); }
     SALES_ROWS=[]; SALES_META=null; SALES_IDX=new Map();
