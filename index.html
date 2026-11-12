@@ -4851,7 +4851,7 @@ function openRlModal(r){
   if(rs) rs.onclick=()=>{
     const o=RL_MANUAL[key]||(RL_MANUAL[key]={}); o.upd=false; o.tgl=''; o.dus=null; o.pcs=null; o.val=null;
     if(!o.ket) delete RL_MANUAL[key];
-    saveRlManual(); close(); POSTAT=null; renderDetail();
+    saveRlManual(); close(); POSTAT=null; render();
   };
   const save=()=>{
     const nf=inp.value.trim();
@@ -4883,7 +4883,8 @@ async function salesLoad(){
   }catch(e){ if(window.idbFail) window.idbFail('memuat data penjualan',e); }
   refreshSalesInfo();
   window.__salesLoaded=true;
-  if(typeof window.renderDetail==='function') window.renderDetail();
+  /* render penuh (bukan hanya Detail) agar KPI, donat status & Account vs Actual ikut memakai data penjualan */
+  if(typeof render==='function') render(); else if(typeof window.renderDetail==='function') window.renderDetail();
 }
 async function salesHandleFile(file){
   try{
@@ -4926,7 +4927,7 @@ async function salesHandleFile(file){
       newFrom:nFrom,newTo:nTo,at:new Date().toLocaleString('id-ID')};
     try{ await salesDbPut({rows:merged,meta}); }catch(e){ if(window.idbFail) window.idbFail('menyimpan data penjualan',e); }
     SALES_ROWS=merged; SALES_META=meta; buildSalesIdx();
-    refreshSalesInfo(); renderDetail();
+    refreshSalesInfo(); render();
   }catch(e){ console.error(e); alert('Gagal membaca CSV penjualan: '+e.message); }
 }
 (function(){
@@ -4938,7 +4939,7 @@ async function salesHandleFile(file){
   if(clr) clr.onclick=async()=>{
     if(!confirm('Hapus data penjualan yang tersimpan? Kolom Realisasi & Aksi akan kosong lagi.')) return;
     try{ await salesDbClear(); }catch(e){}
-    SALES_ROWS=[]; SALES_META=null; SALES_IDX=new Map(); refreshSalesInfo(); renderDetail();
+    SALES_ROWS=[]; SALES_META=null; SALES_IDX=new Map(); refreshSalesInfo(); render();
   };
 })();
 
@@ -5182,7 +5183,7 @@ function renderDetail(){
         MANUAL_ITEMS.splice(r._manualIdx,1);
         saveManualItems();
         editDetailKey=null;
-        renderDetail();
+        render();
       }
     }else{
       const po=r._po;
