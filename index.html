@@ -1479,11 +1479,11 @@ function parseDate(s){
 }
 const rp=n=>'Rp '+Math.round(n).toLocaleString('en-US');
 const rp2=n=>'Rp '+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-const rpShort=n=>{const a=Math.abs(n);
-  if(a>=1e12) return 'Rp '+(n/1e12).toFixed(2)+'T';
-  if(a>=1e9) return 'Rp '+(n/1e9).toFixed(2)+'B';
-  if(a>=1e6) return 'Rp '+(n/1e6).toFixed(1)+'M';
-  return 'Rp '+Math.round(n).toLocaleString('en-US');};
+const rpShort=n=>{const a=Math.abs(n);   // format Indonesia: Triliun / Miliar / juta, koma desimal, titik ribuan
+  if(a>=1e12) return 'Rp '+(n/1e12).toFixed(2).replace('.',',')+' Triliun';
+  if(a>=1e9) return 'Rp '+(n/1e9).toFixed(2).replace('.',',')+' Miliar';
+  if(a>=1e6) return 'Rp '+(n/1e6).toFixed(1).replace('.',',')+' juta';
+  return 'Rp '+Math.round(n).toLocaleString('id-ID');};
 const MONLABEL=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function grab(re,txt,g=1){const m=txt.match(re);return m?m[g].trim():'';}
 
@@ -2963,24 +2963,39 @@ function parseLotte(flat,fname){
   // Each item wraps across rows: "<name part1> <category>" / "<TaxRate> <UOMqty>/<Unit> <QtyDus> <UnitPrice> <Amount>"
   // / "<name part2> <TempFlag>" / "<barcode>". The numeric row has no temp-flag prefix and the
   // barcode is printed *after* it, not before — so we read one line above and below each numeric match.
+  // Tata letak A (lama)  : baris angka memuat satuan utuh  "11 24 /Box 10.000 11,018.67 2,644,481.00"
+  // Tata letak B (baru)  : satuan terpecah ("24 /" menempel di baris nama, "Box" di baris bawah), sehingga baris angka
+  //                        hanya  "11 10.000 11,018.67 2,644,481.00". Keduanya dibaca dan diurutkan sesuai posisi di dokumen.
+  const hits=[];
   const lineRe=/(\d{1,2})\s+(\d+)\s*\/\s*([A-Za-z]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)/g;
   let m;
-  while((m=lineRe.exec(flat))!==null){
-    let bSeg=flat.slice(0,m.index).replace(/\s+$/,'');
+  while((m=lineRe.exec(flat))!==null) hits.push({idx:m.index,end:m.index+m[0].length,qty:m[4],amt:m[6],split:false});
+  const lineReB=/^[ \t]*(\d{1,2})[ \t]+(\d+(?:\.\d+)?)[ \t]+(\d[\d,]*\.\d{2})[ \t]+(\d[\d,]*\.\d{2})[ \t]*$/gm;
+  while((m=lineReB.exec(flat))!==null) hits.push({idx:m.index,end:m.index+m[0].length,qty:m[2],amt:m[4],split:true});
+  hits.sort((a,b)=>a.idx-b.idx);
+  for(const h of hits){
+    let bSeg=flat.slice(0,h.idx).replace(/\s+$/,'');
     let name1=bSeg.slice(bSeg.lastIndexOf('\n')+1).trim();
-    name1=name1.replace(/\s+[A-Z][A-Z&]{0,9}$/,'').trim(); // drop trailing category code (e.g. "H&B")
+    let catGone=false;
+    if(h.split){
+      name1=name1.replace(/\s+\d+\s*\/\s*$/,'').trim();                                   // buang "24 /" (isi per satuan)
+      const nn=name1.replace(/^(.*[A-Z0-9%)\.])\s+(?:[A-Z][a-z]+\s+)*Product$/,'$1').trim();   // buang kategori "Bulk Product" dsb.
+      if(nn!==name1){ name1=nn; catGone=true; }
+    }
+    if(!catGone) name1=name1.replace(/\s+[A-Z][A-Z&]{0,9}$/,'').trim(); // drop trailing category code (e.g. "H&B")
 
-    let aSeg=flat.slice(m.index+m[0].length).replace(/^\s+/,'');
+    let aSeg=flat.slice(h.end).replace(/^\s+/,'');
     const nl=aSeg.indexOf('\n');
     let name2=(nl>=0?aSeg.slice(0,nl):aSeg).trim();
+    if(h.split) name2=name2.replace(/\s+(Box|Pcs|Ctn|Carton|Case|Pack|Bag|Btl|Bottle|Unit|Dus)$/,'').trim();   // buang satuan "Box"
     name2=name2.replace(/\s+(Dry|Chilled|Frozen|Fresh|Beku|Reefer)$/i,'').trim(); // drop trailing temp flag
 
-    const bcm=flat.slice(m.index+m[0].length, m.index+m[0].length+200).match(/\b(\d{12,14})\b/);
+    const bcm=flat.slice(h.end, h.end+200).match(/\b(\d{12,14})\b/);
     const plu=bcm?bcm[1]:'';
 
     const name=[name1,name2].filter(Boolean).join(' ').replace(/\s+/g,' ').trim()||'(item)';
-    const qtyDus=parseFloat(m[4])||0; // qty is printed like "1.000" = decimal, NOT thousands-grouped
-    const total=idNum(m[6]); // Amount column from the doc — this is EXCL PPN, same basis as po.setelahPot
+    const qtyDus=parseFloat(h.qty)||0; // qty is printed like "1.000" = decimal, NOT thousands-grouped
+    const total=idNum(h.amt); // Amount column from the doc — this is EXCL PPN, same basis as po.setelahPot
     po.items.push({name,plu,qtyDus,qty:0,total}); // Qty in PCS left empty for Lotte for now (shows "—")
   }
   // The "Amount" column read above is excl-PPN (same basis as po.setelahPot).
