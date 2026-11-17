@@ -110,6 +110,7 @@ window.bimaLib=(function(){
   .kpi.k-ok{border-left-color:var(--ok)}.kpi.k-ok .val{color:var(--ok)}
   .kpi.k-no{border-left-color:var(--danger)}.kpi.k-no .val{color:var(--danger)}
   .kpi.k-wait{border-left-color:var(--warn)}.kpi.k-wait .val{color:var(--warn)}
+  .kpi.k-part{border-left-color:#ea580c}.kpi.k-part .val{color:#ea580c;font-size:25px}
   .kpi.kpi-st .sub2{font-size:11.5px;margin-top:3px;color:var(--muted)}
   .kpi-note{grid-column:1/-1;font-size:12px;color:var(--warn);background:var(--warn-bg);border-radius:var(--r);padding:7px 11px}
   .pos{color:var(--pos)}.neg{color:var(--neg)}
@@ -1036,7 +1037,7 @@ window.RLIM=(function(){
     <div class="ic" style="font-size:22px;flex:none">📥</div>
     <div style="flex:1;min-width:0">
       <h2 style="font-size:13px;margin:0 0 1px">Drop your PO files here</h2>
-      <p style="font-size:11.5px;margin:0">PDF, TXT, atau ZIP &mdash; Alfamart, Hypermart, Yogya/Griya, Ramayana, Transmart, Lotte, AEON, Hero, Indomaret, Indogrosir, Berkah Bandung Ops</p>
+      <p style="font-size:11.5px;margin:0">PDF, TXT, atau ZIP &mdash; Alfamart, Hypermart, Yogya/Griya, Ramayana, Transmart, Lotte, AEON, Hero, Indomaret, Indogrosir, Borma, Berkah Bandung Ops</p>
     </div>
     <span class="pick" style="flex:none;padding:6px 12px;font-size:12px">Pilih File</span>
     <input id="file" type="file" accept="application/pdf,.pdf,.txt,text/plain,.zip,application/zip" multiple hidden>
@@ -1662,6 +1663,11 @@ function pageKey(txt, acc){
     const m=txt.match(/PO\s*No\.?\s*[:\s]*(\d{11,})/i);
     return m? m[1] : null;
   }
+  if(acc==='BORMA'){
+    // "No. PO : 4002 - K26.07867" -> kunci = nomor dokumen (halaman lanjutan tanpa "No. PO" menempel ke PO sebelumnya)
+    const m=txt.match(/No\.?\s*PO\s*:?\s*(?:\d{3,5}\s*-\s*)?([A-Z]\d{2}\.\d{3,7})/i);
+    return m? m[1].toUpperCase() : null;
+  }
   if(acc==='INDOMARET'){
     // NO.PO field: "NO.PO : 5H6Q70586"
     const m=txt.match(/NO\.\s*PO\s*:\s*([A-Z0-9]+)/i);
@@ -1808,12 +1814,27 @@ function parseFileRaw(input,fname){
     }
     return [parseBerkah(flat,fname)];
   }
-  const parserFor = a => a==='BERKAH'?parseBerkah : a==='HYPERMART'?parseHypermart : a==='YOGYA'?parseYogya : a==='LOTTE'?parseLotte : a==='INDOMARET'?parseIndomaret : parseAlfamart;
+  if(acc==='BORMA'){
+    // Multi-halaman / banyak PO dalam satu PDF: kelompokkan halaman per "No. PO", lalu parse tiap PO.
+    if(pages && pages.length>1){
+      const mGroups=[]; const mIdx={};
+      for(const pg of pages){
+        const key=pageKey(pg,'BORMA');
+        if(!key){ if(mGroups.length) mGroups[mGroups.length-1].text+='\n'+pg; continue; }
+        if(mIdx[key]!=null){ mGroups[mIdx[key]].text+='\n'+pg; }
+        else { mIdx[key]=mGroups.length; mGroups.push({key,text:pg}); }
+      }
+      if(mGroups.length){
+        return mGroups.map(g=>parseBorma(g.text.replace(/\u00a0/g,' '),fname)).filter(po=>!isEmptyPO(po));
+      }
+    }
+    return [parseBorma(flat,fname)];
+  }
+  const parserFor = a => a==='BORMA'?parseBorma : a==='BERKAH'?parseBerkah : a==='HYPERMART'?parseHypermart : a==='YOGYA'?parseYogya : a==='LOTTE'?parseLotte : a==='INDOMARET'?parseIndomaret : parseAlfamart;
 
   // Single-page or non-PDF: parse whole thing as one PO
   if(!pages || pages.length<=1){
     if(acc==='UNKNOWN'){ const g=parseAlfamart(flat,fname); g.account='(Unrecognized)'; g._unknown=true; return [g]; }
-    if(acc==='BORMA') return []; // PO Borma diabaikan
     return [parserFor(acc)(flat,fname)];
   }
 
@@ -2817,9 +2838,77 @@ function parseYogya(flat,fname){
   }
   return po;
 }
-/* ---- Borma Supermarket ----
-   Layout: BORMA — parsing dihapus, PO Borma di dalam ZIP diabaikan. */
-/* parseBorma removed — Borma POs are skipped when found inside ZIP files */
+/* ---- Borma Supermarket (BORMA CIJERAH HEAD OFFICE / PRAMA) ----
+   Layout: header "PURCHASE ORDER (P.O)"; "No. PO : 4002 - K26.07867"; "Tgl. PO"/"Tgl. Kirim" format YYYY-MM-DD;
+   "ke Toko: STORE BORMA CIKUTRA" = destination. Kolom item:
+     No | SKU(+kode) | BARCODE | NAMA BARANG;UOM | QTY | ISI | HARGA | DISC | NETTO | T. NETTO | KETERANGAN
+   Mapping:
+     No. PO (nomor dokumen, mis. K26.07867) -> po.fpp        ke Toko -> po.dc
+     BARCODE -> item.plu   SKU -> item.sku   QTY x ISI (UOM PCS) -> item.qty (pcs)   qtyDus dikosongkan (diisi dari Master Barang)
+     TOTAL HARGA -> hargaBeli   DISKON ITEM -> potItem   TOTAL NETTO -> setelahPot
+     PPN MASUKAN -> ppn   TOTAL NILAI PESANAN -> inclPPN
+   Total per item = porsi T. NETTO terhadap TOTAL NILAI PESANAN (incl PPN). */
+function parseBorma(flat,fname){
+  const num = s => { if(s==null) return 0; const m=String(s).replace(/,/g,'').match(/-?\d+(?:\.\d+)?/); return m? parseFloat(m[0]) : 0; };
+  const lines = flat.split('\n').map(l=>l.replace(/\s+/g,' ').trim()).filter(Boolean);
+  const text = lines.join('\n');
+  const po={account:'Borma',file:fname,items:[]};
+
+  // No. PO: "4002 - K26.07867" -> fpp = nomor dokumen "K26.07867"
+  const mNo = text.match(/No\.?\s*PO\s*:?\s*(?:(\d{3,5})\s*-\s*)?([A-Z]\d{2}\.\d{3,7})/i);
+  po.fpp = mNo ? mNo[2].toUpperCase() : (grab(/No\.?\s*PO\s*:?\s*([A-Z0-9.\-]+)/i,text) || fname.replace(/\.pdf$/i,''));
+  if(mNo && mNo[1]) po.poPrefix = mNo[1];
+
+  // Destination = toko tujuan; vendor hanya informasi
+  po.dc = grab(/ke\s*Toko\s*:?\s*(.+?)\s+T\.?\s*O\.?\s*P\s*:/i,text) || grab(/ke\s*Toko\s*:?\s*([^\n]+)/i,text) || 'Borma';
+  po.dc = po.dc.replace(/\s+/g,' ').trim();
+  po.supplier = grab(/Vendor\s*:?\s*[A-Z0-9.]+\s*-\s*(.+?)\s+No\.?\s*PO/i,text).replace(/\s+PT\s*$/i,'').trim() || 'BUKIT INTI MAKMUR ABADI';
+
+  // Tanggal: sumber YYYY-MM-DD -> DD/MM/YYYY (hindari pergeseran zona waktu saat dibaca JS)
+  const fmtD = s => { const m=s&&s.match(/(\d{4})-(\d{2})-(\d{2})/); return m? m[3]+'/'+m[2]+'/'+m[1] : ''; };
+  po.tglPesan = fmtD(grab(/Tgl\.?\s*PO\s*:?\s*(\d{4}-\d{2}-\d{2})/i,text));
+  po.tglKirim = fmtD(grab(/Tgl\.?\s*Kirim\s*:?\s*(\d{4}-\d{2}-\d{2})/i,text));
+
+  // Item: "1 12044485 2 8993379286057 HARMONY EDT ... 100ML;PCS 12 1 14,666.67 733.33 13,933.34 167,200.08 Disc 5.00%"
+  const rowRe=/^(\d{1,3})\s+(\d{5,10})\s*(\d{0,2})\s+(\d{8,14})\s+(.+?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})(?:\s+(.*))?$/;
+  const netto=[];
+  for(const L of lines){
+    const m=L.match(rowRe); if(!m) continue;
+    let name=m[5].trim();
+    const uom=((name.match(/;\s*([A-Za-z]{1,5})\s*$/)||[])[1]||'PCS').toUpperCase();
+    name=name.replace(/;\s*[A-Za-z]{1,5}\s*$/,'').replace(/\s+/g,' ').trim();   // buang akhiran ";PCS" / ";PC" (nama terpotong)
+    const qRaw=num(m[6]), isi=parseInt(m[7],10)||1;
+    let qtyDus=0, qty=qRaw*isi;
+    if(/^(CTN|DUS|KRT|BOX|BAL|KARTON)$/.test(uom)){ qtyDus=qRaw; }   // satuan karton -> Qty in Dus terisi, pcs = QTY x ISI
+    const tNet=num(m[10]);
+    netto.push(tNet);
+    po.items.push({
+      no:m[1], sku:m[2], plu:m[4], name,
+      qtyDus, qty, isiKarton:String(isi),
+      hargaSatuan:num(m[8]),
+      total:tNet                       // diproporsikan ke TOTAL NILAI PESANAN (incl PPN) di bawah
+    });
+  }
+
+  // Ringkasan nilai
+  po.hargaBeli  = num(grab(/TOTAL\s*HARGA\s*:?\s*([\d,\.]+)/i,text));
+  po.potItem    = num(grab(/DISKON\s*ITEM\s*:?\s*([\d,\.]+)/i,text));
+  po.setelahPot = num(grab(/TOTAL\s*NETTO\s*:?\s*([\d,\.]+)/i,text));
+  po.ppn        = num(grab(/PPN\s*MASUKAN\s*:?\s*([\d,\.]+)/i,text));
+  po.inclPPN    = num(grab(/TOTAL\s*NILAI\s*PESANAN\s*:?\s*([\d,\.]+)/i,text));
+  const sumNet  = netto.reduce((a,b)=>a+b,0);
+  if(!po.setelahPot) po.setelahPot = +sumNet.toFixed(2);
+  if(!po.inclPPN)    po.inclPPN    = +(po.setelahPot+(po.ppn||po.setelahPot*0.11)).toFixed(2);
+  if(!po.ppn)        po.ppn        = +(po.inclPPN-po.setelahPot).toFixed(2);
+  if(!po.hargaBeli)  po.hargaBeli  = +(po.setelahPot+(po.potItem||0)).toFixed(2);
+  if(sumNet>0 && po.inclPPN>0){
+    po.items.forEach(it=>{ it.total=+(it.total/sumNet*po.inclPPN).toFixed(2); });
+    // selisih pembulatan (sen) dimasukkan ke item terakhir agar jumlah item = TOTAL NILAI PESANAN persis
+    const diff=+(po.inclPPN-po.items.reduce((x,it)=>x+it.total,0)).toFixed(2);
+    if(po.items.length && Math.abs(diff)>0 && Math.abs(diff)<1) po.items[po.items.length-1].total=+(po.items[po.items.length-1].total+diff).toFixed(2);
+  }
+  return po;
+}
 /* ---- Lotte (Grosir/Mart/Super) ----
    Layout: "Purchase Order" header, Order No is a 14-18 digit number (also shown
    as the barcode under the title). Footer shows the total *excluding* PPN next
@@ -3307,7 +3396,7 @@ function initBranchStorage(){
     let changed=false;
     if(Array.isArray(list)&&list.length){ BRANCH_LIST=list; changed=true; }
     if(map&&typeof map==='object'){ BRANCH_MAP=map; changed=true; }
-    if(changed && typeof render==='function' && POS.length) render();
+    if(changed && typeof render==='function' && POS.length) renderSoon();
     refreshRekapPoBadge();
   }).catch(()=>{});
 }
@@ -3449,7 +3538,7 @@ function restorePOS(){
       po.received = po.received || !!received[po.fpp];
     }
     POS = rows;
-    render();
+    renderSoon();
   }).catch(e=>idbFail('memuat data PO',e))
     .finally(()=>{ window.__posRestored=true; if(window.refreshNewItemBadge) window.refreshNewItemBadge(); if(window.refreshAvBadge) window.refreshAvBadge(); initBranchStorage(); });
 }
@@ -4018,7 +4107,7 @@ function agg(){
 }
 
 /* ============ KPI status pengiriman PO ============ */
-const KPI_SETS={ok:['Terkirim','Terkirim Sebagian'],no:['Tidak Terkirim'],wait:['Belum Terkirim','(Tanpa status)']};
+const KPI_SETS={ok:['Terkirim','Terkirim Sebagian'],part:['Terkirim Sebagian'],no:['Tidak Terkirim'],wait:['Belum Terkirim','(Tanpa status)']};
 function poKpiSummary(){
   const by={}; ['Terkirim','Terkirim Sebagian','Belum Terkirim','Tidak Terkirim','(Tanpa status)'].forEach(k=>by[k]={n:0,v:0});
   const prev=_noStatF; _noStatF=true;   // KPI selalu menampilkan ketiga status walau filter Status PO aktif
@@ -4027,12 +4116,23 @@ function poKpiSummary(){
     const seen=new Map();
     for(const r of [...detailRows(),...man]){
       const k=(r.account||'')+'##'+(r.fpp||'');
-      let e=seen.get(k); if(!e){ e={st:poStatusOf(r).aksi||'(Tanpa status)',v:0}; seen.set(k,e); }
-      if(itemSel(r)) e.v+=r.total||0;
+      let e=seen.get(k); if(!e){ e={st:poStatusOf(r).aksi||'(Tanpa status)',v:0,u:0,ui:0}; seen.set(k,e); }
+      if(itemSel(r)){
+        e.v+=r.total||0;
+        if(e.st==='Terkirim Sebagian'){   // porsi item yang BELUM terkirim pada PO terkirim sebagian (dihitung per item, basis pcs lalu dus — sama dengan penentuan status)
+          const x=realisasiInfo(r,r._po||{}); let ratio;
+          const oP=Math.round(r.qty||0);
+          if(oP>0&&x.pcs!=null) ratio=Math.min(1,(x.pcs||0)/oP);
+          else if((r.qtyDus||0)>0&&x.dus!=null) ratio=Math.min(1,(x.dus||0)/r.qtyDus);
+          else ratio=(x.dus!=null||x.pcs!=null||x.val!=null)?1:0;
+          e.u+=(r.total||0)*(1-ratio); if(ratio<0.999) e.ui++;
+        }
+      }
     }
-    seen.forEach(e=>{ const b=by[e.st]||(by[e.st]={n:0,v:0}); b.n++; b.v+=e.v; });
+    const part={v:0,items:0,po:0,pv:0};
+    seen.forEach(e=>{ const b=by[e.st]||(by[e.st]={n:0,v:0}); b.n++; b.v+=e.v; if(e.st==='Terkirim Sebagian'){ part.po++; part.v+=e.u; part.items+=e.ui; part.pv+=e.v; } });
     let n=0,v=0; Object.keys(by).forEach(k=>{n+=by[k].n; v+=by[k].v;});
-    return {by,total:{n,v}};
+    return {by,total:{n,v},part};
   } finally { _noStatF=prev; }
 }
 function populateDcStatusFilters(){
@@ -4062,6 +4162,11 @@ let charts={};
 function destroyCharts(){Object.values(charts).forEach(c=>c&&c.destroy());charts={};}
 function cssVar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
 
+var _rsT=0,_rs0=0;
+function renderSoon(){   // gabungkan beberapa render beruntun saat startup/sinkron jadi satu (debounce 120 ms, maksimal tunggu 400 ms)
+  const now=Date.now(); if(!_rsT) _rs0=now; clearTimeout(_rsT);
+  _rsT=setTimeout(()=>{ _rsT=0; try{ render(); }catch(e){ console.warn('render',e); } },Math.max(0,Math.min(120,_rs0+400-now)));
+}
 function render(){ try{ yomartNormalize(); }catch(e){ console.warn('Yomart',e); } POSTAT=null; _inRender=true; try{ return _renderImpl(); } finally{ _inRender=false; } }
 function _renderImpl(){
   if(!POS.length){$('#dash').classList.add('hide');updateBrandBtns();refreshRekapPoBadge();return;}
@@ -4079,8 +4184,11 @@ function _renderImpl(){
   const _pc=n=>K.total.n>0?(n/K.total.n*100).toFixed(1)+'%':'-';
   const _on=k=>{const set=KPI_SETS[k];return aksiFilter.length===set.length&&set.every(x=>aksiFilter.includes(x))?' on':'';};
   const _card=(k,cls,lbl,x,sub2)=>`<div class="kpi kpi-st ${cls}${_on(k)}" data-kpi="${k}" title="Klik untuk memfilter Status PO"><div class="lbl">${lbl}</div><div class="val">${x.n.toLocaleString('id-ID')}</div><div class="sub">${rpShort(x.v)} &middot; ${_pc(x.n)} dari ${K.total.n.toLocaleString('id-ID')} PO</div><div class="sub2">${sub2}</div></div>`;
+  const kp=K.part, _pcp=kp.pv>0?(kp.v/kp.pv*100).toFixed(1)+'%':'-';
+  const _cardPart=`<div class="kpi kpi-st k-part${_on('part')}" data-kpi="part" title="Klik untuk memfilter PO Terkirim Sebagian"><div class="lbl">Nilai Item Tidak Terkirim (dari PO Terkirim Sebagian)</div><div class="val">${rpShort(kp.v)}</div><div class="sub">${kp.items.toLocaleString('id-ID')} item belum terkirim &middot; ${kp.po.toLocaleString('id-ID')} PO sebagian</div><div class="sub2">${_pcp} dari nilai item PO sebagian (${rpShort(kp.pv)})</div></div>`;
   $('#kpis').innerHTML=
     _card('ok','k-ok','Total PO Terkirim',kOk,`${K.by['Terkirim'].n} terkirim penuh &middot; ${K.by['Terkirim Sebagian'].n} sebagian`)
+   +_cardPart
    +_card('no','k-no','Total PO Tidak Terkirim',kNo,'Tanggal kirim terlewat &amp; belum ada realisasi')
    +_card('wait','k-wait','PO Outstanding / Belum Terkirim',kWt,K.by['(Tanpa status)'].n?`${K.by['Belum Terkirim'].n} belum jatuh tempo &middot; ${K.by['(Tanpa status)'].n} tanpa tanggal kirim`:'Belum jatuh tempo &amp; belum ada realisasi')
    +((typeof SALES_ROWS!=='undefined'&&!SALES_ROWS.length)?'<div class="kpi-note">Data penjualan belum diupload — status Terkirim/Tidak Terkirim dihitung dari tanggal kirim saja. Upload CSV Penjualan di tab Detail PO List agar akurat.</div>':'');
@@ -4884,7 +4992,7 @@ async function salesLoad(){
   refreshSalesInfo();
   window.__salesLoaded=true;
   /* render penuh (bukan hanya Detail) agar KPI, donat status & Account vs Actual ikut memakai data penjualan */
-  if(typeof render==='function') render(); else if(typeof window.renderDetail==='function') window.renderDetail();
+  if(typeof renderSoon==='function') renderSoon(); else if(typeof window.renderDetail==='function') window.renderDetail();
 }
 async function salesHandleFile(file){
   try{
@@ -5198,7 +5306,7 @@ function renderDetail(){
 }
 $('#detailSearch').addEventListener('input',()=>{RLIM.reset('detail');renderDetail();});
 window.renderDetail=renderDetail;
-window.render=render;
+window.render=render; window.renderSoon=renderSoon;
 salesLoad();
 
 let editListKey=null;
@@ -5506,6 +5614,13 @@ const CLOUD=(function(){
   const VERKEY='bima_cloud_ver', NAMEKEY='bima_cloud_name';
   let ver={}; try{ver=JSON.parse(localStorage.getItem(VERKEY)||'{}')||{};}catch(e){}
   const saveVer=()=>{try{localStorage.setItem(VERKEY,JSON.stringify(ver));}catch(e){}};
+  /* sidik jari isi terakhir yang sama dengan cloud (khusus data "lainnya": pengaturan + tabel IndexedDB).
+     Dipakai agar penulisan ulang data yang SAMA tidak dikirim lagi / tidak menaikkan versi di cloud. */
+  const FPKEY='bima_cloud_fp'; let fp={}; try{fp=JSON.parse(localStorage.getItem(FPKEY)||'{}')||{};}catch(e){}
+  const saveFp=()=>{try{localStorage.setItem(FPKEY,JSON.stringify(fp));}catch(e){}};
+  function stable(v){ if(Array.isArray(v)) return '['+v.map(stable).join(',')+']'; if(v&&typeof v==='object') return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}'; return JSON.stringify(v); }
+  function fpOf(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); } return str.length+':'+(h>>>0).toString(36); }
+  function fpVal(k,val){ if(!val) return ''; return isIdb(k)?fpOf(stable({d:val.db,s:val.store,k:val.keys,r:val.records})):fpOf(stable(val)); }
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   let applying=false, flushing=false, timer=null, needRender=false, overrideChoice=null, ready=false, needsReload=false;
   const dirty=new Map();   // key -> {force}
@@ -5571,7 +5686,7 @@ const CLOUD=(function(){
 
   /* ---------- data "lainnya": semua localStorage berawalan bima atau nka + semua IndexedDB bernama bima atau nka (sama dengan fitur Backup) ---------- */
   const _setItem=Storage.prototype.setItem, _removeItem=Storage.prototype.removeItem, _clearLs=Storage.prototype.clear;
-  const LS_SKIP=new Set(['bima_theme','bima_cloud_ver','bima_cloud_name',MKEY,RKEY,RLKEY]);   // tema = preferensi perangkat; sisanya sudah punya kunci sendiri
+  const LS_SKIP=new Set(['bima_cloud_fp','bima_theme','bima_cloud_ver','bima_cloud_name',MKEY,RKEY,RLKEY]);   // tema = preferensi perangkat; sisanya sudah punya kunci sendiri
   const lsOk=k=>/^(bima|nka)/i.test(k)&&!LS_SKIP.has(k);
   const IDB_SKIP={bimajabar:new Set(['poData']),bimajabar_salesPO:new Set(['kv'])};             // PO & penjualan sudah ditangani khusus
   const idbOk=(db,st)=>/bima|nka/i.test(db)&&!(IDB_SKIP[db]&&IDB_SKIP[db].has(st));
@@ -5647,20 +5762,51 @@ const CLOUD=(function(){
     if(k==='manual') return MANUAL_ITEMS.length>0;
     return Object.keys(k==='received'?received:RL_MANUAL).length>0;
   }
-  async function mergeInto(k,remote){   // dipakai saat 2 user menyimpan bersamaan (data lokal diprioritaskan)
+  /* ----- penggabungan AMAN: tidak ada entri yang dihapus; pihak B menang bila satu entri sama-sama ada ----- */
+  const _isPlain=o=>o&&typeof o==='object'&&!Array.isArray(o);
+  function _mergeVal(a,b){
+    if(Array.isArray(a)&&Array.isArray(b)){
+      const all=a.concat(b); let idf=null;
+      if(all.length&&all.every(_isPlain)){ for(const f of ['itemNo','id','key','fpp','plu','code','kode']){ if(all.every(x=>x[f]!==undefined&&x[f]!==null&&x[f]!=='')){ idf=f; break; } } }
+      const m=new Map();
+      for(const x of a) m.set(idf?String(x[idf]):JSON.stringify(x),x);
+      for(const x of b) m.set(idf?String(x[idf]):JSON.stringify(x),x);
+      return [...m.values()];
+    }
+    if(_isPlain(a)&&_isPlain(b)){ const o=Object.assign({},a); for(const k of Object.keys(b)) o[k]=(k in a)?_mergeVal(a[k],b[k]):b[k]; return o; }
+    return b;
+  }
+  function _mergeLsStr(a,b){            // nilai localStorage = string (umumnya JSON): gabung isi, bukan timpa
+    if(a===undefined) return b; if(b===undefined) return a; if(a===b) return b;
+    let pa,pb; try{ pa=JSON.parse(a); pb=JSON.parse(b); }catch(e){ return b; }
+    if((Array.isArray(pa)&&Array.isArray(pb))||(_isPlain(pa)&&_isPlain(pb))) return JSON.stringify(_mergeVal(pa,pb));
+    return b;
+  }
+  function mergeLs(A,B){ const o=Object.assign({},A||{}); for(const k of Object.keys(B||{})) o[k]=(k in o)?_mergeLsStr(o[k],B[k]):B[k]; return o; }
+  async function mergeInto(k,remote,pref){   // pref 'remote' = data cloud menang bila bentrok; default = data lokal menang. Tidak ada data yang dihapus.
     const local=await getVal(k);
+    const A=pref==='remote'?local:remote, B=pref==='remote'?remote:local;
     if(isIdb(k)){
       if(!local) return remote; if(!remote) return local;
       const m=new Map(); const idOf=(p,i)=>JSON.stringify(p.keys[i]);
-      remote.records.forEach((r,i)=>m.set(idOf(remote,i),[r,remote.keys[i]]));
-      local.records.forEach((r,i)=>m.set(idOf(local,i),[r,local.keys[i]]));
+      A.records.forEach((r,i)=>m.set(idOf(A,i),[r,A.keys[i]]));
+      B.records.forEach((r,i)=>m.set(idOf(B,i),[r,B.keys[i]]));
       const recs=[],keys=[]; for(const [r,kk] of m.values()){ recs.push(r); keys.push(kk); }
       return Object.assign({},local,{records:recs,keys:keys});
     }
-    if(k==='ls') return Object.assign({},remote||{},local);
-    if(k==='pos'){ const m=new Map(); for(const p of (remote||[])) m.set(p.fpp+'||'+p.account,p); for(const p of local) m.set(p.fpp+'||'+p.account,p); return [...m.values()]; }
-    if(k==='manual'){ const seen=new Set(),out=[]; for(const x of [].concat(remote||[],local)){ const s=JSON.stringify(x); if(!seen.has(s)){seen.add(s);out.push(x);} } return out; }
-    if(k==='received'||k==='rl') return Object.assign({},remote||{},local);
+    if(k==='ls') return mergeLs(A,B);
+    if(k==='pos'){ const m=new Map(); for(const p of (A||[])) m.set(p.fpp+'||'+p.account,p); for(const p of (B||[])) m.set(p.fpp+'||'+p.account,p); return [...m.values()]; }
+    if(k==='manual'){ const seen=new Set(),out=[]; for(const x of [].concat(remote||[],local||[])){ const s2=JSON.stringify(x); if(!seen.has(s2)){seen.add(s2);out.push(x);} } return out; }
+    if(k==='received'||k==='rl') return Object.assign({},A||{},B||{});
+    if(k==='sales'){
+      if(!local||!local.rows||!local.rows.length) return remote;
+      if(!remote||!remote.rows||!remote.rows.length) return local;
+      const seen=new Set(), rows=[];
+      for(const r of [].concat(remote.rows,local.rows)){ const kk=r.po+'|'+r.item+'|'+r.ts+'|'+r.dus+'|'+r.val+'|'+(r.brn||'')+'|'+(r.cc||''); if(seen.has(kk)) continue; seen.add(kk); rows.push(r); }
+      const meta=Object.assign({},remote.meta||{},local.meta||{});
+      let f=0,t=0; for(const r of rows){ if(r.ts>0){ if(!f||r.ts<f) f=r.ts; if(r.ts>t) t=r.ts; } } if(f){ meta.from=f; meta.to=t; }
+      return {rows,meta};
+    }
     return local;
   }
   const _savePOS=idbSavePOS, _clrPOS=idbClearPOS, _delPOS=idbDeletePOS;
@@ -5697,16 +5843,37 @@ const CLOUD=(function(){
   function afterApply(){
     try{POSTAT=null;}catch(e){}
     try{refreshSalesInfo();}catch(e){}
-    try{render();}catch(e){console.warn('render after sync',e);}
+    try{renderSoon();}catch(e){console.warn('render after sync',e);}
     try{if(window.refreshNewItemBadge)window.refreshNewItemBadge();}catch(e){}
   }
 
   /* ---------- pull ---------- */
-  async function pull(k,meta){
-    const v=await sbDownload(meta.path);
-    let ok; applying=true; try{ ok=await applyValue(k,v); }finally{ applying=false; }
+  /* Menerapkan data cloud. Data "lainnya" (Master Barang Sistem, Master Barang, pengaturan, riwayat, vendor, cabang)
+     SELALU digabung dengan data lokal — tidak pernah menimpa/menghapus. PO & penjualan diganti sesuai cloud,
+     kecuali sinkron pertama di perangkat yang sudah punya data lokal (digabung). */
+  async function pullApply(k,meta,v,firstTime){
+    let val=v, merged=false;
+    if((isGeneric(k)||firstTime) && await hasLocal(k)){ val=await mergeInto(k,v,'remote'); merged=true; }
+    let ok; applying=true; try{ ok=await applyValue(k,val); }finally{ applying=false; }
     if(ok===false) return false;      // belum bisa diterapkan di perangkat ini -> versi tidak dicatat, dicoba lagi nanti
-    ver[k]=meta.version; saveVer(); return true;
+    ver[k]=meta.version; saveVer();
+    if(isGeneric(k)){
+      const hr=fpVal(k,v); fp[k]=hr; saveFp();
+      if(merged && fpVal(k,val)!==hr) mark(k);      // ada data lokal yang belum ada di cloud -> kirim gabungannya
+    }else if(merged) mark(k);
+    return true;
+  }
+  async function pull(k,meta,firstTime){ return pullApply(k,meta,await sbDownload(meta.path),firstTime); }
+  async function pullMany(list,meta,first,onProg){      // unduh PARALEL, terapkan berurutan
+    const res={pulled:false,gen:false};
+    const jobs=list.map(k=>sbDownload(meta[k].path).then(v=>({v}),e=>({e})));
+    for(let i=0;i<list.length;i++){
+      const k=list[i], r=await jobs[i];
+      if(r.e) throw r.e;
+      if(await pullApply(k,meta[k],r.v,first&&first[k])){ res.pulled=true; if(isGeneric(k)) res.gen=true; }
+      if(onProg) onProg(i+1,list.length);
+    }
+    return res;
   }
   function okStatus(meta){
     if(needsReload) setStatus('↻ Muat ulang untuk data terbaru','Master/pengaturan diperbarui oleh user lain. Klik untuk memuat ulang halaman.');
@@ -5720,20 +5887,25 @@ const CLOUD=(function(){
   async function checkRemote(){
     if(flushing||dirty.size||applying) return;
     try{
-      const meta=await sbGetMeta(); let changed=false, gen=false;
-      for(const k of Object.keys(meta)){
-        if(!isKnown(k)) continue;
-        const rm=meta[k];
-        if(rm.version>(ver[k]||0)){ setStatus('☁ Mengambil data…'); if(await pull(k,rm)){ changed=true; if(isGeneric(k)) gen=true; } }
+      const meta=await sbGetMeta();
+      const todo=Object.keys(meta).filter(k=>isKnown(k)&&meta[k].version>(ver[k]||0));
+      if(todo.length){
+        setStatus('☁ Mengambil data…');
+        const res=await pullMany(todo,meta,null,(d,n)=>setStatus('☁ Mengambil data '+d+'/'+n+'…'));
+        if(res.gen){ await softRefresh(); needsReload=true; }
+        if(res.pulled) afterApply();
       }
-      if(gen){ await softRefresh(); needsReload=true; }
-      if(changed) afterApply();
       okStatus(meta);
     }catch(e){ console.warn('cloud pull',e); setStatus('⚠ Gagal sinkron','Tidak bisa menghubungi cloud. Data lokal tetap dipakai.\nKlik untuk coba lagi.\n'+e.message); }
   }
 
   /* ---------- push ---------- */
   async function pushKey(k,force){
+    const useFp=isGeneric(k);
+    if(useFp){
+      force=false;   // data "lainnya": penghapusan lokal TIDAK PERNAH menimpa/menghapus data di cloud (selalu digabung)
+      const v0=await getVal(k); if(v0&&fp[k]===fpVal(k,v0)) return;   // isi sama dengan yang terakhir tersinkron -> tidak perlu dikirim, versi cloud tidak naik
+    }
     for(let attempt=0;attempt<4;attempt++){
       const meta=await sbGetMeta(); const rm=meta[k]; const base=rm?rm.version:0;
       if(rm&&rm.version!==(ver[k]||0)&&!force){
@@ -5744,10 +5916,11 @@ const CLOUD=(function(){
       }
       const val=await getVal(k);
       if(isIdb(k)&&!val) return;      // store tidak ada di perangkat ini
+      if(useFp&&fp[k]===fpVal(k,val)) return;
       const {blob,ext}=await gz(JSON.stringify(val));
       const path=k+'/'+(base+1)+'-'+Math.random().toString(36).slice(2,8)+'.'+ext;
       await sbUpload(path,blob);
-      if(await sbCommit(k,base,path,blob.size)){ ver[k]=base+1; saveVer(); return; }
+      if(await sbCommit(k,base,path,blob.size)){ ver[k]=base+1; saveVer(); if(useFp){ fp[k]=fpVal(k,val); saveFp(); } return; }
     }
     throw new Error('konflik berulang, coba lagi');
   }
@@ -5805,37 +5978,28 @@ const CLOUD=(function(){
 
   /* ---------- sinkron awal ---------- */
   async function firstSync(){
-    for(let i=0;i<75&&!(window.__posRestored&&window.__salesLoaded);i++) await sleep(200);   // tunggu data lokal selesai dimuat
-    let reloadAfter=false;
+    for(let i=0;i<300&&!(window.__posRestored&&window.__salesLoaded);i++) await sleep(50);   // tunggu data lokal selesai dimuat
     try{
       setStatus('☁ Mengambil data…');
       const units=await localIdbUnits();                       // daftar store IndexedDB lokal
-      const meta=await sbGetMeta(); let pulled=false, pulledGen=false;
+      const meta=await sbGetMeta();
       const all=[...new Set([].concat(FIXED,['ls'],units,Object.keys(meta).filter(isKnown)))];
+      const todo=[], first={};
       for(const k of all){
         const rm=meta[k];
         if(!rm){ if(await hasLocal(k)) mark(k); continue; }          // cloud kosong -> data lokal jadi data awal
         if((ver[k]||0)===rm.version) continue;                       // sudah sama
-        if(!ver[k]&&await hasLocal(k)){                              // perangkat ini punya data lokal lama
-          if(overrideChoice===null) overrideChoice=confirm('Data bersama di cloud ditemukan.\n\nOK = pakai data cloud (data di perangkat ini DIGANTI: PO, penjualan, master barang, dll).\nBatal = pertahankan data perangkat ini dan gabungkan ke cloud.\n\nTips: klik Batal bila data di perangkat ini lebih baru.');
-          if(!overrideChoice){ mark(k); continue; }
-        }
-        if(await pull(k,rm)){ pulled=true; if(isGeneric(k)) pulledGen=true; }
+        first[k]=!ver[k]&&await hasLocal(k);                         // perangkat punya data lokal lama -> DIGABUNG, tidak ditimpa
+        todo.push(k);
       }
-      if(pulled) afterApply();
-      if(pulledGen){ reloadAfter=true; }
+      if(todo.length){
+        const res=await pullMany(todo,meta,first,(d,n)=>setStatus('☁ Mengambil data '+d+'/'+n+'…'));
+        if(res.pulled) afterApply();
+        if(res.gen){ try{ await softRefresh(); }catch(e){} needsReload=true; }   // master/pengaturan baru: dimuat ke memori, tanpa reload otomatis
+      }
       if(!dirty.size) okStatus(meta);
     }catch(e){ console.warn('cloud first sync',e); setStatus('⚠ Gagal sinkron','Tidak bisa menghubungi cloud. Data lokal tetap dipakai.\nKlik untuk coba lagi.\n'+e.message); }
     ready=true;
-    if(reloadAfter){                                              // master/pengaturan baru dari cloud -> muat ulang sekali agar semua tab memakainya
-      let last=0; try{ last=+sessionStorage.getItem('bima_cloud_rl')||0; }catch(e){}
-      if(Date.now()-last>60000){
-        try{ sessionStorage.setItem('bima_cloud_rl',String(Date.now())); }catch(e){}
-        setStatus('☁ Memuat data master…');
-        if(dirty.size) await flush();
-        location.reload();
-      }
-    }
   }
   chip.onclick=()=>{ if(needsReload){ if(dirty.size) flush().then(()=>location.reload()); else location.reload(); return; } if(dirty.size) flush(); else checkRemote(); };
   setInterval(()=>{ if(!document.hidden) checkRemote(); },45000);
@@ -6641,7 +6805,7 @@ const CLOUD=(function(){
       try{ updateMsCount(); }catch(e){}
     }
     /* Gambar ulang dashboard: No Item & Realisasi bergantung pada Master Barang */
-    try{ if(typeof window.render === 'function') window.render(); }catch(e){}
+    try{ if(typeof window.renderSoon === 'function') window.renderSoon(); else if(typeof window.render === 'function') window.render(); }catch(e){}
   };
 
   function escHtmlMs(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -10426,14 +10590,20 @@ window.renderDashboard = renderDashboard;
 
   // Muat map ke cache memori: gabungkan IndexedDB + localStorage (union), lalu render.
   function initVendorCache(){
-    _vendorCache = lsLoad(); // tampilkan cepat dari cadangan dulu
+    const _lsMap = lsLoad();
+    _vendorCache = _lsMap; // tampilkan cepat dari cadangan dulu
     return avIdbGet().then(idbMap=>{
+      let need=false;
       if(idbMap && typeof idbMap === 'object'){
         // gabung: entri IDB menang kalau ada bentrok (IDB = sumber utama)
-        _vendorCache = Object.assign({}, _vendorCache, idbMap);
+        _vendorCache = Object.assign({}, _lsMap, idbMap);
+        // tulis ulang HANYA bila kedua store memang berbeda (menulis data yang sama dianggap "perubahan" oleh sinkron cloud)
+        const mj=JSON.stringify(_vendorCache);
+        need = mj!==JSON.stringify(idbMap) || mj!==JSON.stringify(_lsMap);
+      } else {
+        need = Object.keys(_lsMap).length>0;
       }
-      // pastikan kedua store konsisten
-      persistVendorMap(_vendorCache);
+      if(need) persistVendorMap(_vendorCache);   // pastikan kedua store konsisten
     }).catch(()=>{ /* IDB gagal (mis. private mode) -> tetap pakai localStorage */ });
   }
 
