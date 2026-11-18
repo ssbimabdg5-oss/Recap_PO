@@ -2969,34 +2969,47 @@ function parseLotte(flat,fname){
   const hits=[];
   const lineRe=/(\d{1,2})\s+(\d+)\s*\/\s*([A-Za-z]+)\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)/g;
   let m;
-  while((m=lineRe.exec(flat))!==null) hits.push({idx:m.index,end:m.index+m[0].length,qty:m[4],amt:m[6],split:false});
-  const lineReB=/^[ \t]*(\d{1,2})[ \t]+(\d+(?:\.\d+)?)[ \t]+(\d[\d,]*\.\d{2})[ \t]+(\d[\d,]*\.\d{2})[ \t]*$/gm;
-  while((m=lineReB.exec(flat))!==null) hits.push({idx:m.index,end:m.index+m[0].length,qty:m[2],amt:m[4],split:true});
+  while((m=lineRe.exec(flat))!==null) hits.push({idx:m.index,end:m.index+m[0].length,qty:m[4],amt:m[6],isi:m[2],split:false});
+  // Tata letak B: baris angka berakhir "<tax> [<isi> /] <qty> <harga> <amount>". Boleh diawali teks kategori / temp flag
+  // (mis. "Bulk Product   11   50.000   20,762.34   12,457,404.00") karena pembagian baris bergeser tergantung tinggi sel.
+  const lineReB=/^([^\n]*?)[ \t]*\b(\d{1,2})[ \t]+(?:(\d+)[ \t]*\/[ \t]*)?(\d+(?:\.\d+)?)[ \t]+(\d[\d,]*\.\d{2})[ \t]+(\d[\d,]*\.\d{2})[ \t]*$/gm;
+  while((m=lineReB.exec(flat))!==null) hits.push({idx:m.index,end:m.index+m[0].length,qty:m[4],amt:m[6],isi:m[3]||'',split:true});
   hits.sort((a,b)=>a.idx-b.idx);
+  const stripCat=t=>t.replace(/\s+(?:Non[ -])?(?:[A-Z][a-z]+\s+)?Product$/,'').trim();   // kategori "Bulk Product" dsb.
   for(const h of hits){
     let bSeg=flat.slice(0,h.idx).replace(/\s+$/,'');
     let name1=bSeg.slice(bSeg.lastIndexOf('\n')+1).trim();
-    let catGone=false;
+    let isi=h.isi;
     if(h.split){
-      name1=name1.replace(/\s+\d+\s*\/\s*$/,'').trim();                                   // buang "24 /" (isi per satuan)
-      const nn=name1.replace(/^(.*[A-Z0-9%)\.])\s+(?:[A-Z][a-z]+\s+)*Product$/,'$1').trim();   // buang kategori "Bulk Product" dsb.
-      if(nn!==name1){ name1=nn; catGone=true; }
+      const mu=name1.match(/\s+(\d+)\s*\/\s*$/);                       // "SUNCO MINYAK 12 /" -> isi per box = 12
+      if(mu){ if(!isi) isi=mu[1]; name1=name1.slice(0,mu.index).trim(); }
+      name1=stripCat(name1.replace(/\s+(Dry|Chilled|Frozen)$/,'').trim());
+    }else{
+      const n0=stripCat(name1);
+      if(n0!==name1) name1=n0;                                           // kategori sudah dibuang -> jangan potong kata nama lagi
+      else name1=name1.replace(/\s+[A-Z][A-Z&]{0,9}$/,'').trim();        // drop trailing category code (e.g. "H&B")
     }
-    if(!catGone) name1=name1.replace(/\s+[A-Z][A-Z&]{0,9}$/,'').trim(); // drop trailing category code (e.g. "H&B")
 
     let aSeg=flat.slice(h.end).replace(/^\s+/,'');
     const nl=aSeg.indexOf('\n');
     let name2=(nl>=0?aSeg.slice(0,nl):aSeg).trim();
     if(h.split) name2=name2.replace(/\s+(Box|Pcs|Ctn|Carton|Case|Pack|Bag|Btl|Bottle|Unit|Dus)$/,'').trim();   // buang satuan "Box"
     name2=name2.replace(/\s+(Dry|Chilled|Frozen|Fresh|Beku|Reefer)$/i,'').trim(); // drop trailing temp flag
+    if(h.split){
+      name2=stripCat(name2);
+      if(/^\d{8,}$/.test(name2)||/Planned\s*Delivery|Order\s*Status|^Page\b/i.test(name2)) name2='';   // bukan lanjutan nama (nama hanya 1 baris)
+    }
 
     const bcm=flat.slice(h.end, h.end+200).match(/\b(\d{12,14})\b/);
     const plu=bcm?bcm[1]:'';
 
     const name=[name1,name2].filter(Boolean).join(' ').replace(/\s+/g,' ').trim()||'(item)';
     const qtyDus=parseFloat(h.qty)||0; // qty is printed like "1.000" = decimal, NOT thousands-grouped
+    const isiN=parseInt(isi,10)||0;    // isi per box (kolom UOM "12 /Box")
     const total=idNum(h.amt); // Amount column from the doc — this is EXCL PPN, same basis as po.setelahPot
-    po.items.push({name,plu,qtyDus,qty:0,total}); // Qty in PCS left empty for Lotte for now (shows "—")
+    const it={name,plu,qtyDus,qty:isiN>0?+(qtyDus*isiN).toFixed(3):0,total};   // Qty PCS = dus x isi (harga satuan di dokumen per pcs)
+    if(isiN>0) it.isiKarton=String(isiN);
+    po.items.push(it);
   }
   // The "Amount" column read above is excl-PPN (same basis as po.setelahPot).
   // Dashboard Total Value should be PPN-inclusive like other accounts (Alfamart,
